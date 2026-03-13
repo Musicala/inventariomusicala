@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inventario · Musicala</title>
+  <meta name="description" content="Sistema de inventario de Musicala para consultar, registrar y administrar instrumentos, equipos y movimientos.">
+  <meta name="theme-color" content="#f7f8fc">
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <!-- LOGIN SCREEN -->
+  <section id="loginScreen" class="login-screen" aria-label="Inicio de sesión">
+    <div class="login-card">
+      <div class="login-brand">
+        <img src="assets/logo.png" alt="Logo Musicala">
+        <div>
+          <h1>Inventario Musicala</h1>
+          <p>Accede con tu usuario para gestionar instrumentos, equipos y movimientos.</p>
+        </div>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="off">
+        <div class="field">
+          <label for="loginUser">Usuario</label>
+          <input
+            id="loginUser"
+            name="loginUser"
+            type="text"
+            placeholder="Ej: Alek"
+            autocomplete="username"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label for="loginPassword">Contraseña</label>
+          <input
+            id="loginPassword"
+            name="loginPassword"
+            type="password"
+            placeholder="Escribe tu contraseña"
+            autocomplete="current-password"
+            required
+          >
+        </div>
+
+        <div id="loginError" class="login-error" hidden></div>
+
+        <button id="loginBtn" type="submit">
+          Ingresar
+        </button>
+      </form>
+
+      <div class="login-footer">
+        <small id="loginStatusText">Sistema interno de inventario Musicala</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- APP SHELL -->
+  <div id="appShell" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="logo" id="logoTrigger" title="Mantén presionado para abrir el panel admin si tienes permisos">
+        <img src="assets/logo.png" alt="Logo Musicala">
+        <div class="brand-copy">
+          <span>Inventario Musicala</span>
+          <small>Instrumentos, equipos y movimientos</small>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="topbar-search-wrap">
+          <input
+            id="searchInput"
+            class="search"
+            type="search"
+            placeholder="Buscar instrumento, cable, atril..."
+            autocomplete="off"
+            aria-label="Buscar en inventario"
+          >
+        </div>
+
+        <div class="session-box">
+          <div class="session-user">
+            <strong id="sessionUserName">Usuario</strong>
+            <small id="sessionUserRole">Rol</small>
+          </div>
+
+          <button id="logoutBtn" type="button" class="secondary">
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <!-- app.js inserta aquí toolbar y resumen -->
+
+      <section class="filters card-soft" aria-label="Filtros de inventario">
+        <div class="filters-head">
+          <h2>Filtros</h2>
+          <small>Explora por ubicación, categoría o estado</small>
+        </div>
+
+        <div class="filters-grid">
+          <div class="field">
+            <label for="filterLocation">Ubicación</label>
+            <select id="filterLocation">
+              <option value="">Todas las ubicaciones</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="filterCategory">Categoría</label>
+            <select id="filterCategory">
+              <option value="">Todas las categorías</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="filterStatus">Estado</label>
+            <select id="filterStatus">
+              <option value="">Todos los estados</option>
+              <option value="ACTIVO">ACTIVO</option>
+              <option value="MANTENIMIENTO">MANTENIMIENTO</option>
+              <option value="DAÑADO">DAÑADO</option>
+              <option value="ARCHIVADO">ARCHIVADO</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-head">
+        <div>
+          <h2>Inventario</h2>
+          <small id="inventorySectionHelp">Consulta existencias, revisa detalles y registra movimientos.</small>
+        </div>
+      </section>
+
+      <div id="inventoryList" class="grid" aria-live="polite">
+        <!-- items renderizados por app.js -->
+      </div>
+
+      <!-- PANEL ADMIN -->
+      <section id="adminPanel" class="admin-panel">
+        <div class="admin-head">
+          <div>
+            <h2>Panel Admin</h2>
+            <p>Herramientas administrativas del inventario.</p>
+          </div>
+          <span class="admin-badge">Acceso restringido</span>
+        </div>
+
+        <div class="admin-actions">
+          <button id="btnArchiveItem" type="button">
+            Archivar ítem actual
+          </button>
+
+          <button id="btnChangeRole" type="button" class="secondary">
+            Cambiar rol de usuario
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL DETALLE ITEM -->
+  <div id="itemModal" class="modal" aria-hidden="true">
+    <div class="modal-content modal-lg" role="dialog" aria-modal="true" aria-labelledby="itemTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="itemTitle">Ítem</h2>
+          <small>Detalle del elemento y stock por ubicación</small>
+        </div>
+        <button
+          class="icon-close secondary"
+          type="button"
+          onclick="app.closeModal('itemModal')"
+          aria-label="Cerrar detalle del ítem"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div id="itemInfo"></div>
+
+      <div class="modal-actions">
+        <button id="btnMovement" type="button">
+          Registrar movimiento
+        </button>
+
+        <button id="btnHistory" class="secondary" type="button">
+          Ver historial
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL MOVIMIENTO -->
+  <div id="movementModal" class="modal" aria-hidden="true">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="movementTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="movementTitle">Registrar movimiento</h2>
+          <small>Actualiza existencias, traslados o retiros del ítem</small>
+        </div>
+        <button
+          class="icon-close secondary"
+          type="button"
+          onclick="app.closeModal('movementModal')"
+          aria-label="Cerrar movimiento"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="movementAction">Acción</label>
+          <select id="movementAction">
+            <option value="ADD">Agregar</option>
+            <option value="REMOVE">Retirar</option>
+            <option value="MOVE">Mover</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="movementQty">Cantidad</label>
+          <input id="movementQty" type="number" min="1" step="1" placeholder="Ej: 1">
+        </div>
+
+        <div class="field">
+          <label for="movementOrigin">Ubicación origen</label>
+          <input id="movementOrigin" type="text" placeholder="Ej: Bodega principal">
+        </div>
+
+        <div class="field">
+          <label for="movementDest">Ubicación destino</label>
+          <input id="movementDest" type="text" placeholder="Ej: Salón 3">
+        </div>
+
+        <div class="field field-full">
+          <label for="movementReason">Motivo</label>
+          <textarea id="movementReason" placeholder="Escribe una razón clara del movimiento"></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="saveMovement" type="button">
+          Guardar
+        </button>
+
+        <button
+          class="secondary"
+          type="button"
+          onclick="app.closeModal('movementModal')"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL HISTORIAL -->
+  <div id="historyModal" class="modal" aria-hidden="true">
+    <div class="modal-content modal-lg" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="historyTitle">Historial</h2>
+          <small>Movimientos recientes del ítem seleccionado</small>
+        </div>
+        <button
+          class="icon-close secondary"
+          type="button"
+          onclick="app.closeModal('historyModal')"
+          aria-label="Cerrar historial"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div id="historyList"></div>
+
+      <div class="modal-actions">
+        <button
+          class="secondary"
+          type="button"
+          onclick="app.closeModal('historyModal')"
+        >
+          Cerrar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
