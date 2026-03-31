@@ -1,12 +1,13 @@
 'use strict';
 
 /* ============================================================================
-  Inventario Musicala — Frontend app.js (v3 con login)
+  Inventario Musicala — Frontend app.js (mejorado)
   - Login con Apps Script + hoja Usuarios
   - Sesión local simple
   - Muestra ítems aunque no tengan stock registrado
   - Permite crear / editar ítems usando upsertItem
   - Mejor feedback, filtros y render
+  - Corrige listeners de UI dinámica
 ============================================================================ */
 
 /* =========================
@@ -75,6 +76,31 @@ const el = {
   adminPanel: $('#adminPanel'),
   btnArchiveItem: $('#btnArchiveItem'),
   btnChangeRole: $('#btnChangeRole'),
+
+  // dynamic refs, se llenan después
+  btnReloadData: null,
+  btnNewItem: null,
+  inventoryToolbarSub: null,
+  sumItems: null,
+  sumWithStock: null,
+  sumUnits: null,
+  sumLocations: null,
+  btnEditItem: null,
+  itemEditorModal: null,
+  itemEditorTitle: null,
+  itemFormNombre: null,
+  itemFormCategoria: null,
+  itemFormUnidad: null,
+  itemFormEstado: null,
+  itemFormValor: null,
+  itemFormVida: null,
+  itemFormDescripcion: null,
+  itemFormFotos: null,
+  itemFormInitLocation: null,
+  itemFormInitQty: null,
+  saveItemBtn: null,
+  btnAdminNewItem: null,
+  btnAdminRefresh: null,
 };
 
 /* =========================
@@ -103,7 +129,12 @@ const state = {
   },
   ui: {
     adminUnlocked: false,
-  }
+  },
+  bindings: {
+    staticWired: false,
+    dynamicWired: false,
+    adminSecretWired: false,
+  },
 };
 
 /* =========================
@@ -130,14 +161,15 @@ function apiUrl_(params) {
 
 async function parseApiResponse_(res) {
   let data;
+
   try {
     data = await res.json();
   } catch (_) {
     throw new Error('RESPUESTA_INVALIDA_DEL_BACKEND');
   }
 
-  if (!data || !data.ok) {
-    throw new Error(data?.error || 'API_ERROR');
+  if (!res.ok || !data || !data.ok) {
+    throw new Error(data?.error || `HTTP_${res.status || 'ERROR'}`);
   }
 
   return data;
@@ -153,7 +185,7 @@ async function apiGet_(action, params = {}) {
 
   const res = await fetch(url, {
     method: 'GET',
-    cache: 'no-store'
+    cache: 'no-store',
   });
 
   return parseApiResponse_(res);
@@ -177,7 +209,7 @@ async function apiPost_(action, payloadObj = {}, params = {}) {
   const res = await fetch(WEBAPP_URL, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
     },
     body,
   });
@@ -189,13 +221,13 @@ async function apiLogin_(user, password) {
   const url = apiUrl_({
     action: 'login',
     token: TOKEN,
-    user: user,
-    password: password,
+    user,
+    password,
   });
 
   const res = await fetch(url, {
     method: 'GET',
-    cache: 'no-store'
+    cache: 'no-store',
   });
 
   return parseApiResponse_(res);
@@ -218,28 +250,30 @@ function getSession_() {
 
 function saveSession_(who) {
   if (!who || !who.user) return;
-  localStorage.setItem(LS.session, JSON.stringify({
-    user: who.user,
-    name: who.name || who.user,
-    role: String(who.role || 'USER').toUpperCase(),
-    active: who.active !== false,
-  }));
+
+  localStorage.setItem(
+    LS.session,
+    JSON.stringify({
+      user: who.user,
+      name: who.name || who.user,
+      role: String(who.role || 'USER').toUpperCase(),
+      active: who.active !== false,
+    })
+  );
 }
 
 function clearSession_() {
   localStorage.removeItem(LS.session);
 }
 
-function isLoggedIn_() {
-  return !!getSession_();
-}
-
 function applySessionToState_() {
   const session = getSession_();
+
   if (!session) {
     state.who = null;
     return;
   }
+
   state.who = {
     user: session.user,
     name: session.name || session.user,
@@ -255,11 +289,13 @@ function showLoginScreen_(show) {
 
 function setLoginError_(msg = '') {
   if (!el.loginError) return;
+
   if (!msg) {
     el.loginError.hidden = true;
     el.loginError.textContent = '';
     return;
   }
+
   el.loginError.hidden = false;
   el.loginError.textContent = msg;
 }
@@ -272,9 +308,11 @@ function setLoginLoading_(loading, text) {
 
 function updateSessionUI_() {
   if (!state.who) return;
+
   if (el.sessionUserName) {
     el.sessionUserName.textContent = state.who.name || state.who.user || 'Usuario';
   }
+
   if (el.sessionUserRole) {
     el.sessionUserRole.textContent = String(state.who.role || 'USER').toUpperCase();
   }
@@ -286,12 +324,15 @@ async function validateStoredSession_() {
 
   try {
     const data = await apiGet_('me', { user: session.user });
-    if (!data?.who?.user) throw new Error('INVALID_SESSION');
+
+    if (!data?.who?.user) {
+      throw new Error('INVALID_SESSION');
+    }
 
     saveSession_(data.who);
     state.who = data.who;
     return true;
-  } catch (err) {
+  } catch (_) {
     clearSession_();
     state.who = null;
     return false;
@@ -336,7 +377,6 @@ async function submitLogin_(ev) {
     updateSessionUI_();
 
     await bootApp_();
-
     toast_(`Hola, ${who.name || who.user} 👋`);
   } catch (err) {
     console.error(err);
@@ -349,9 +389,12 @@ async function submitLogin_(ev) {
 
 function logout_() {
   clearSession_();
+
   state.ready = false;
   state.booted = false;
   state.who = null;
+  state.categories = [];
+  state.locations = [];
   state.itemsById = {};
   state.stock = [];
   state.viewRows = [];
@@ -363,10 +406,16 @@ function logout_() {
 
   if (el.searchInput) el.searchInput.value = '';
   if (el.loginPassword) el.loginPassword.value = '';
-  if (el.loginUser) el.loginUser.focus();
+
+  closeModal('itemModal');
+  closeModal('movementModal');
+  closeModal('historyModal');
+  closeModal('itemEditorModal');
 
   showLoginScreen_(true);
   setLoginError_('');
+
+  if (el.loginUser) el.loginUser.focus();
 }
 
 function mapLoginError_(code) {
@@ -449,6 +498,7 @@ function formatDateTime_(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
+
   try {
     return new Intl.DateTimeFormat('es-CO', {
       dateStyle: 'medium',
@@ -460,7 +510,9 @@ function formatDateTime_(iso) {
 }
 
 function byText_(a, b) {
-  return String(a || '').localeCompare(String(b || ''), 'es', { sensitivity: 'base' });
+  return String(a || '').localeCompare(String(b || ''), 'es', {
+    sensitivity: 'base',
+  });
 }
 
 function debounce_(fn, ms = 180) {
@@ -481,6 +533,37 @@ function injectEnhancedUI_() {
   injectItemEditorModal_();
   decorateMovementForm_();
   decorateAdminPanel_();
+  refreshDynamicRefs_();
+}
+
+function refreshDynamicRefs_() {
+  el.btnReloadData = $('#btnReloadData');
+  el.btnNewItem = $('#btnNewItem');
+  el.inventoryToolbarSub = $('#inventoryToolbarSub');
+
+  el.sumItems = $('#sumItems');
+  el.sumWithStock = $('#sumWithStock');
+  el.sumUnits = $('#sumUnits');
+  el.sumLocations = $('#sumLocations');
+
+  el.btnEditItem = $('#btnEditItem');
+
+  el.itemEditorModal = $('#itemEditorModal');
+  el.itemEditorTitle = $('#itemEditorTitle');
+  el.itemFormNombre = $('#itemFormNombre');
+  el.itemFormCategoria = $('#itemFormCategoria');
+  el.itemFormUnidad = $('#itemFormUnidad');
+  el.itemFormEstado = $('#itemFormEstado');
+  el.itemFormValor = $('#itemFormValor');
+  el.itemFormVida = $('#itemFormVida');
+  el.itemFormDescripcion = $('#itemFormDescripcion');
+  el.itemFormFotos = $('#itemFormFotos');
+  el.itemFormInitLocation = $('#itemFormInitLocation');
+  el.itemFormInitQty = $('#itemFormInitQty');
+  el.saveItemBtn = $('#saveItemBtn');
+
+  el.btnAdminNewItem = $('#btnAdminNewItem');
+  el.btnAdminRefresh = $('#btnAdminRefresh');
 }
 
 function injectToolbar_() {
@@ -505,10 +588,6 @@ function injectToolbar_() {
   `;
 
   el.container?.insertBefore(toolbar, el.container.firstElementChild || null);
-
-  el.btnReloadData = $('#btnReloadData');
-  el.btnNewItem = $('#btnNewItem');
-  el.inventoryToolbarSub = $('#inventoryToolbarSub');
 }
 
 function injectSummaryBar_() {
@@ -546,11 +625,6 @@ function injectSummaryBar_() {
   } else {
     el.container?.insertBefore(summary, el.inventoryList);
   }
-
-  el.sumItems = $('#sumItems');
-  el.sumWithStock = $('#sumWithStock');
-  el.sumUnits = $('#sumUnits');
-  el.sumLocations = $('#sumLocations');
 }
 
 function injectEditButtonInItemModal_() {
@@ -564,7 +638,6 @@ function injectEditButtonInItemModal_() {
   btn.textContent = 'Editar ítem';
 
   el.btnHistory.parentElement?.appendChild(btn);
-  el.btnEditItem = btn;
 }
 
 function injectItemEditorModal_() {
@@ -636,22 +709,8 @@ function injectItemEditorModal_() {
 
   document.body.appendChild(modal);
 
-  el.itemEditorModal = $('#itemEditorModal');
-  el.itemEditorTitle = $('#itemEditorTitle');
-  el.itemFormNombre = $('#itemFormNombre');
-  el.itemFormCategoria = $('#itemFormCategoria');
-  el.itemFormUnidad = $('#itemFormUnidad');
-  el.itemFormEstado = $('#itemFormEstado');
-  el.itemFormValor = $('#itemFormValor');
-  el.itemFormVida = $('#itemFormVida');
-  el.itemFormDescripcion = $('#itemFormDescripcion');
-  el.itemFormFotos = $('#itemFormFotos');
-  el.itemFormInitLocation = $('#itemFormInitLocation');
-  el.itemFormInitQty = $('#itemFormInitQty');
-  el.saveItemBtn = $('#saveItemBtn');
-
-  el.itemEditorModal.addEventListener('click', (ev) => {
-    if (ev.target === el.itemEditorModal) closeModal('itemEditorModal');
+  modal.addEventListener('click', (ev) => {
+    if (ev.target === modal) closeModal('itemEditorModal');
   });
 }
 
@@ -663,7 +722,9 @@ function decorateMovementForm_() {
   hint.style.display = 'block';
   hint.style.color = '#6b7280';
   hint.style.marginTop = '6px';
-  hint.textContent = 'Puedes escribir cualquier ubicación. Si ya existe, intenta usar el mismo nombre exacto.';
+  hint.textContent =
+    'Puedes escribir cualquier ubicación. Si ya existe, intenta usar el mismo nombre exacto.';
+
   el.movementReason?.insertAdjacentElement('afterend', hint);
 }
 
@@ -686,8 +747,6 @@ function decorateAdminPanel_() {
     `;
 
     el.adminPanel.appendChild(wrap);
-    el.btnAdminNewItem = $('#btnAdminNewItem');
-    el.btnAdminRefresh = $('#btnAdminRefresh');
   }
 }
 
@@ -704,7 +763,7 @@ function setToolbarSubtitle_() {
 function updateSummary_() {
   const itemRows = Object.values(state.itemsById);
   const totalItems = itemRows.length;
-  const withStock = itemRows.filter(item => getTotalQtyForItem_(item.item_id) > 0).length;
+  const withStock = itemRows.filter((item) => getTotalQtyForItem_(item.item_id) > 0).length;
   const totalUnits = state.stock.reduce((acc, r) => acc + Number(r.cantidad_actual || 0), 0);
   const totalLocations = state.locations.length;
 
@@ -716,16 +775,20 @@ function updateSummary_() {
 
 function getTotalQtyForItem_(item_id) {
   return state.stock
-    .filter(r => r.item_id === item_id)
+    .filter((r) => r.item_id === item_id)
     .reduce((acc, r) => acc + Number(r.cantidad_actual || 0), 0);
 }
 
 function buildViewRows_() {
   const items = Object.values(state.itemsById);
-  state.viewRows = items.map(item => {
+
+  state.viewRows = items.map((item) => {
     const itemStockRows = stockRowsForItem_(item.item_id);
     const totalQty = itemStockRows.reduce((acc, r) => acc + Number(r.cantidad_actual || 0), 0);
-    const locations = itemStockRows.map(r => safeTrim_(r.location_id)).filter(Boolean).sort(byText_);
+    const locations = itemStockRows
+      .map((r) => safeTrim_(r.location_id))
+      .filter(Boolean)
+      .sort(byText_);
     const mainLocation = locations[0] || '';
     const locationCount = locations.length;
 
@@ -756,11 +819,11 @@ function renderFilters_() {
 
   el.filterLocation.innerHTML =
     `<option value="">Todas las ubicaciones</option>` +
-    state.locations.map(l => `<option value="${esc_(l)}">${esc_(l)}</option>`).join('');
+    state.locations.map((l) => `<option value="${esc_(l)}">${esc_(l)}</option>`).join('');
 
   el.filterCategory.innerHTML =
     `<option value="">Todas las categorías</option>` +
-    state.categories.map(c => `<option value="${esc_(c)}">${esc_(c)}</option>`).join('');
+    state.categories.map((c) => `<option value="${esc_(c)}">${esc_(c)}</option>`).join('');
 
   el.filterLocation.value = keepLoc;
   el.filterCategory.value = keepCat;
@@ -780,21 +843,21 @@ function applyFilters_() {
   let rows = state.viewRows.slice();
 
   if (loc) {
-    rows = rows.filter(r =>
-      r.stockRows.some(sr => safeTrim_(sr.location_id).toLowerCase() === loc)
+    rows = rows.filter((r) =>
+      r.stockRows.some((sr) => safeTrim_(sr.location_id).toLowerCase() === loc)
     );
   }
 
   if (cat) {
-    rows = rows.filter(r => safeTrim_(r.categoria).toLowerCase() === cat);
+    rows = rows.filter((r) => safeTrim_(r.categoria).toLowerCase() === cat);
   }
 
   if (st) {
-    rows = rows.filter(r => safeTrim_(r.estado).toLowerCase() === st);
+    rows = rows.filter((r) => safeTrim_(r.estado).toLowerCase() === st);
   }
 
   if (q) {
-    rows = rows.filter(r => {
+    rows = rows.filter((r) => {
       const blob = [
         r.item_id,
         r.nombre,
@@ -803,7 +866,9 @@ function applyFilters_() {
         r.descripcion,
         r.unidad,
         ...r.locations,
-      ].join(' ').toLowerCase();
+      ]
+        .join(' ')
+        .toLowerCase();
 
       return blob.includes(q);
     });
@@ -820,10 +885,13 @@ function applyFilters_() {
 }
 
 function renderStockList_() {
+  if (!el.inventoryList) return;
+
   const rows = applyFilters_();
 
   if (!rows.length) {
     const hasItems = Object.keys(state.itemsById).length > 0;
+
     el.inventoryList.innerHTML = `
       <div class="card" style="grid-column:1/-1">
         <h3 style="margin:0 0 8px 0;">${hasItems ? 'No hay resultados con esos filtros' : 'No hay ítems para mostrar'}</h3>
@@ -846,17 +914,20 @@ function renderStockList_() {
     return;
   }
 
-  el.inventoryList.innerHTML = rows.map(r => {
-    const name = esc_(r.nombre || '(sin nombre)');
-    const cat = esc_(r.categoria || '');
-    const status = String(r.estado || 'ACTIVO').toUpperCase();
-    const qty = fmtQty_(r.totalQty);
-    const locText = r.locationCount
-      ? (r.locationCount === 1 ? r.mainLocation : `${r.locationCount} ubicaciones`)
-      : 'Sin ubicación';
-    const isZero = Number(r.totalQty || 0) <= 0;
+  el.inventoryList.innerHTML = rows
+    .map((r) => {
+      const name = esc_(r.nombre || '(sin nombre)');
+      const cat = esc_(r.categoria || '');
+      const status = String(r.estado || 'ACTIVO').toUpperCase();
+      const qty = fmtQty_(r.totalQty);
+      const locText = r.locationCount
+        ? r.locationCount === 1
+          ? r.mainLocation
+          : `${r.locationCount} ubicaciones`
+        : 'Sin ubicación';
+      const isZero = Number(r.totalQty || 0) <= 0;
 
-    return `
+      return `
       <div class="card inventory-card" data-item-id="${esc_(r.item_id)}" style="cursor:pointer;">
         <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
           <div style="min-width:0;">
@@ -882,11 +953,12 @@ function renderStockList_() {
         </small>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderItemModal_(item, stockRows) {
-  if (!item) return;
+  if (!item || !el.itemTitle || !el.itemInfo) return;
 
   el.itemTitle.textContent = item.nombre || 'Ítem';
 
@@ -900,10 +972,28 @@ function renderItemModal_(item, stockRows) {
       <div><strong>Estado:</strong> <span class="${badgeClass_(estado)}">${esc_(estado)}</span></div>
       <div><strong>Cantidad total:</strong> ${esc_(fmtQty_(totalQty))}</div>
       ${item.unidad ? `<div><strong>Unidad:</strong> ${esc_(item.unidad)}</div>` : ''}
-      ${item.valor !== '' && item.valor !== null && item.valor !== undefined ? `<div><strong>Valor:</strong> ${esc_(item.valor)}</div>` : ''}
-      ${item.vida_util_anios !== '' && item.vida_util_anios !== null && item.vida_util_anios !== undefined ? `<div><strong>Vida útil:</strong> ${esc_(item.vida_util_anios)} años</div>` : ''}
-      ${item.descripcion ? `<div style="margin-top:4px;"><strong>Descripción:</strong><br>${esc_(item.descripcion)}</div>` : ''}
-      ${item.fotos_links ? `<div style="margin-top:4px;"><strong>Fotos:</strong><br><a href="${esc_(item.fotos_links)}" target="_blank" rel="noopener">Abrir enlace</a></div>` : ''}
+      ${
+        item.valor !== '' && item.valor !== null && item.valor !== undefined
+          ? `<div><strong>Valor:</strong> ${esc_(item.valor)}</div>`
+          : ''
+      }
+      ${
+        item.vida_util_anios !== '' &&
+        item.vida_util_anios !== null &&
+        item.vida_util_anios !== undefined
+          ? `<div><strong>Vida útil:</strong> ${esc_(item.vida_util_anios)} años</div>`
+          : ''
+      }
+      ${
+        item.descripcion
+          ? `<div style="margin-top:4px;"><strong>Descripción:</strong><br>${esc_(item.descripcion)}</div>`
+          : ''
+      }
+      ${
+        item.fotos_links
+          ? `<div style="margin-top:4px;"><strong>Fotos:</strong><br><a href="${esc_(item.fotos_links)}" target="_blank" rel="noopener">Abrir enlace</a></div>`
+          : ''
+      }
     </div>
   `;
 
@@ -914,12 +1004,18 @@ function renderItemModal_(item, stockRows) {
       <div style="margin-top:14px;">
         <strong>Stock por ubicación</strong>
         <div style="margin-top:8px; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-          ${rows.map((sr, idx) => `
-            <div style="display:flex; justify-content:space-between; padding:10px 12px; ${idx < rows.length - 1 ? 'border-bottom:1px solid #e5e7eb;' : ''}">
+          ${rows
+            .map(
+              (sr, idx) => `
+            <div style="display:flex; justify-content:space-between; padding:10px 12px; ${
+              idx < rows.length - 1 ? 'border-bottom:1px solid #e5e7eb;' : ''
+            }">
               <span>${esc_(sr.location_id || 'Sin ubicación')}</span>
               <strong>${esc_(fmtQty_(sr.cantidad_actual))}</strong>
             </div>
-          `).join('')}
+          `
+            )
+            .join('')}
         </div>
       </div>
     `
@@ -932,8 +1028,7 @@ function renderItemModal_(item, stockRows) {
   el.itemInfo.innerHTML = topInfo + stockHtml;
 
   if (el.btnEditItem) {
-    const isAdmin = isAdmin_();
-    el.btnEditItem.style.display = isAdmin ? '' : 'none';
+    el.btnEditItem.style.display = isAdmin_() ? '' : 'none';
   }
 }
 
@@ -953,8 +1048,10 @@ async function loadItems_() {
   const items = Array.isArray(data.items) ? data.items : [];
 
   state.itemsById = {};
+
   for (const item of items) {
     if (!item?.item_id) continue;
+
     state.itemsById[item.item_id] = {
       item_id: item.item_id,
       nombre: item.nombre || '',
@@ -973,7 +1070,7 @@ async function loadStock_() {
   const data = await apiGet_('listStock', { limit: 2500 });
   const rows = Array.isArray(data.stock) ? data.stock : [];
 
-  state.stock = rows.map(r => ({
+  state.stock = rows.map((r) => ({
     item_id: safeTrim_(r.item_id),
     location_id: safeTrim_(r.location_id),
     cantidad_actual: Number(r.cantidad_actual || 0),
@@ -1007,18 +1104,18 @@ async function loadItem_(item_id) {
 }
 
 function stockRowsForItem_(item_id) {
-  return state.stock.filter(r => r.item_id === item_id);
+  return state.stock.filter((r) => r.item_id === item_id);
 }
 
 function rebuildCatalogsFromData_() {
   const catSet = new Set(state.categories || []);
   const locSet = new Set(state.locations || []);
 
-  Object.values(state.itemsById).forEach(item => {
+  Object.values(state.itemsById).forEach((item) => {
     if (safeTrim_(item.categoria)) catSet.add(item.categoria);
   });
 
-  state.stock.forEach(r => {
+  state.stock.forEach((r) => {
     if (safeTrim_(r.location_id)) locSet.add(r.location_id);
   });
 
@@ -1033,10 +1130,7 @@ async function refreshAllData_(silent = false) {
   setLoading_(true);
 
   try {
-    await Promise.all([
-      loadItems_(),
-      loadStock_(),
-    ]);
+    await Promise.all([loadItems_(), loadStock_()]);
 
     rebuildCatalogsFromData_();
     buildViewRows_();
@@ -1067,13 +1161,15 @@ function setLoading_(isLoading) {
   if (el.saveMovement) el.saveMovement.disabled = !!isLoading;
   if (el.saveItemBtn) el.saveItemBtn.disabled = !!isLoading;
   if (el.logoutBtn) el.logoutBtn.disabled = !!isLoading;
+  if (el.btnAdminRefresh) el.btnAdminRefresh.disabled = !!isLoading;
+  if (el.btnAdminNewItem) el.btnAdminNewItem.disabled = !!isLoading;
 }
 
 /* =========================
    EVENTS
 ========================= */
-function wireEvents_() {
-  if (state.booted) return;
+function wireStaticEvents_() {
+  if (state.bindings.staticWired) return;
 
   const rerenderDebounced = debounce_(() => renderStockList_(), 100);
 
@@ -1118,6 +1214,7 @@ function wireEvents_() {
       alert('No hay ítem seleccionado.');
       return;
     }
+
     prepareMovementModal_();
     openModal('movementModal');
   });
@@ -1127,12 +1224,8 @@ function wireEvents_() {
       alert('No hay ítem seleccionado.');
       return;
     }
-    await openHistory_(state.current.item_id);
-  });
 
-  el.btnEditItem?.addEventListener('click', () => {
-    if (!state.current.item) return;
-    openItemEditor_(state.current.item);
+    await openHistory_(state.current.item_id);
   });
 
   el.saveMovement?.addEventListener('click', async () => {
@@ -1140,15 +1233,6 @@ function wireEvents_() {
   });
 
   el.movementAction?.addEventListener('change', updateMovementFieldsVisibility_);
-
-  el.btnReloadData?.addEventListener('click', () => refreshAllData_());
-  el.btnNewItem?.addEventListener('click', () => openItemEditor_(null));
-
-  el.saveItemBtn?.addEventListener('click', async () => {
-    await saveItem_();
-  });
-
-  setupAdminSecret_();
 
   el.btnArchiveItem?.addEventListener('click', async () => {
     await adminArchiveCurrent_();
@@ -1158,18 +1242,62 @@ function wireEvents_() {
     await adminChangeRole_();
   });
 
-  el.btnAdminNewItem?.addEventListener('click', () => openItemEditor_(null));
-  el.btnAdminRefresh?.addEventListener('click', () => refreshAllData_());
-
-  [el.itemModal, el.movementModal, el.historyModal, el.itemEditorModal]
-    .filter(Boolean)
-    .forEach(modal => {
-      modal.addEventListener('click', (ev) => {
-        if (ev.target === modal) modal.classList.remove('active');
-      });
+  [el.itemModal, el.movementModal, el.historyModal].filter(Boolean).forEach((modal) => {
+    modal.addEventListener('click', (ev) => {
+      if (ev.target === modal) modal.classList.remove('active');
     });
+  });
 
-  state.booted = true;
+  setupAdminSecret_();
+  state.bindings.staticWired = true;
+}
+
+function wireDynamicEvents_() {
+  refreshDynamicRefs_();
+
+  if (el.btnReloadData && !el.btnReloadData.dataset.bound) {
+    el.btnReloadData.addEventListener('click', () => refreshAllData_());
+    el.btnReloadData.dataset.bound = '1';
+  }
+
+  if (el.btnNewItem && !el.btnNewItem.dataset.bound) {
+    el.btnNewItem.addEventListener('click', () => openItemEditor_(null));
+    el.btnNewItem.dataset.bound = '1';
+  }
+
+  if (el.btnEditItem && !el.btnEditItem.dataset.bound) {
+    el.btnEditItem.addEventListener('click', () => {
+      if (!state.current.item) return;
+      openItemEditor_(state.current.item);
+    });
+    el.btnEditItem.dataset.bound = '1';
+  }
+
+  if (el.saveItemBtn && !el.saveItemBtn.dataset.bound) {
+    el.saveItemBtn.addEventListener('click', async () => {
+      await saveItem_();
+    });
+    el.saveItemBtn.dataset.bound = '1';
+  }
+
+  if (el.btnAdminNewItem && !el.btnAdminNewItem.dataset.bound) {
+    el.btnAdminNewItem.addEventListener('click', () => openItemEditor_(null));
+    el.btnAdminNewItem.dataset.bound = '1';
+  }
+
+  if (el.btnAdminRefresh && !el.btnAdminRefresh.dataset.bound) {
+    el.btnAdminRefresh.addEventListener('click', () => refreshAllData_());
+    el.btnAdminRefresh.dataset.bound = '1';
+  }
+
+  if (el.itemEditorModal && !el.itemEditorModal.dataset.overlayBound) {
+    el.itemEditorModal.addEventListener('click', (ev) => {
+      if (ev.target === el.itemEditorModal) closeModal('itemEditorModal');
+    });
+    el.itemEditorModal.dataset.overlayBound = '1';
+  }
+
+  state.bindings.dynamicWired = true;
 }
 
 /* =========================
@@ -1184,16 +1312,20 @@ async function openItem_(item_id) {
     try {
       item = await loadItem_(item_id);
       if (item?.item_id) {
-        state.itemsById[item.item_id] = { ...state.itemsById[item.item_id], ...item };
+        state.itemsById[item.item_id] = {
+          ...state.itemsById[item.item_id],
+          ...item,
+          estado: String(item.estado || 'ACTIVO').toUpperCase(),
+        };
       }
     } catch (err) {
       if (!item) throw err;
     }
 
-    state.current.item = item;
+    state.current.item = state.itemsById[item_id] || item;
     state.current.stockRows = stockRowsForItem_(item_id);
 
-    renderItemModal_(item, state.current.stockRows);
+    renderItemModal_(state.current.item, state.current.stockRows);
     openModal('itemModal');
   } catch (err) {
     console.error(err);
@@ -1220,9 +1352,15 @@ function openItemEditor_(item) {
 
   el.itemEditorModal.dataset.editingItemId = item?.item_id || '';
   openModal('itemEditorModal');
+
+  setTimeout(() => {
+    el.itemFormNombre?.focus();
+  }, 30);
 }
 
 async function saveItem_() {
+  if (!el.itemEditorModal || !el.saveItemBtn) return;
+
   const editingItemId = safeTrim_(el.itemEditorModal?.dataset?.editingItemId || '');
 
   const payload = {
@@ -1239,6 +1377,7 @@ async function saveItem_() {
 
   if (!payload.nombre) {
     alert('El nombre es obligatorio.');
+    el.itemFormNombre?.focus();
     return;
   }
 
@@ -1294,11 +1433,14 @@ async function saveItem_() {
 function prepareMovementModal_() {
   if (!state.current.item) return;
 
-  el.movementAction.value = 'ADD';
-  el.movementQty.value = '';
-  el.movementReason.value = '';
-  el.movementOrigin.value = state.filters.location_id || localStorage.getItem(LS.lastLocation) || '';
-  el.movementDest.value = '';
+  if (el.movementAction) el.movementAction.value = 'ADD';
+  if (el.movementQty) el.movementQty.value = '';
+  if (el.movementReason) el.movementReason.value = '';
+  if (el.movementOrigin) {
+    el.movementOrigin.value = state.filters.location_id || localStorage.getItem(LS.lastLocation) || '';
+  }
+  if (el.movementDest) el.movementDest.value = '';
+
   updateMovementFieldsVisibility_();
 }
 
@@ -1308,8 +1450,8 @@ function updateMovementFieldsVisibility_() {
   const originLabel = el.movementOrigin?.previousElementSibling;
   const destLabel = el.movementDest?.previousElementSibling;
 
-  const showOrigin = (action === 'REMOVE' || action === 'MOVE' || action === 'ADD');
-  const showDest = (action === 'ADD' || action === 'MOVE');
+  const showOrigin = action === 'REMOVE' || action === 'MOVE' || action === 'ADD';
+  const showDest = action === 'ADD' || action === 'MOVE';
 
   if (originLabel) originLabel.style.display = showOrigin ? '' : 'none';
   if (destLabel) destLabel.style.display = showDest ? '' : 'none';
@@ -1317,13 +1459,13 @@ function updateMovementFieldsVisibility_() {
   if (el.movementDest) el.movementDest.style.display = showDest ? '' : 'none';
 
   if (action === 'ADD') {
-    el.movementOrigin.placeholder = 'Opcional';
-    el.movementDest.placeholder = 'Ej: Salón 2';
+    if (el.movementOrigin) el.movementOrigin.placeholder = 'Opcional';
+    if (el.movementDest) el.movementDest.placeholder = 'Ej: Salón 2';
   } else if (action === 'REMOVE') {
-    el.movementOrigin.placeholder = 'Ej: Bodega';
+    if (el.movementOrigin) el.movementOrigin.placeholder = 'Ej: Bodega';
   } else if (action === 'MOVE') {
-    el.movementOrigin.placeholder = 'Desde dónde sale';
-    el.movementDest.placeholder = 'Hacia dónde va';
+    if (el.movementOrigin) el.movementOrigin.placeholder = 'Desde dónde sale';
+    if (el.movementDest) el.movementDest.placeholder = 'Hacia dónde va';
   }
 }
 
@@ -1355,6 +1497,8 @@ async function saveMovement_() {
   if (accion === 'ADD' && !ubicacion_origen && !ubicacion_destino) {
     return alert('Escribe al menos una ubicación.');
   }
+
+  if (!el.saveMovement) return;
 
   el.saveMovement.disabled = true;
   el.saveMovement.textContent = 'Guardando...';
@@ -1406,7 +1550,9 @@ function applyStockUpdate_(up) {
 
   if (!item_id || !location_id) return;
 
-  const idx = state.stock.findIndex(r => r.item_id === item_id && r.location_id === location_id);
+  const idx = state.stock.findIndex(
+    (r) => r.item_id === item_id && r.location_id === location_id
+  );
 
   if (idx >= 0) {
     state.stock[idx].cantidad_actual = after;
@@ -1428,7 +1574,13 @@ function applyStockUpdate_(up) {
     });
   }
 
-  if (!state.locations.includes(location_id)) {
+  if (after <= 0) {
+    state.stock = state.stock.filter(
+      (r) => !(r.item_id === item_id && r.location_id === location_id && Number(r.cantidad_actual || 0) <= 0)
+    );
+  }
+
+  if (location_id && !state.locations.includes(location_id)) {
     state.locations.push(location_id);
     state.locations.sort(byText_);
   }
@@ -1442,6 +1594,8 @@ async function openHistory_(item_id) {
     const data = await apiGet_('listMovements', { item_id, limit: 200 });
     const movs = Array.isArray(data.movements) ? data.movements : [];
 
+    if (!el.historyList) return;
+
     if (!movs.length) {
       el.historyList.innerHTML = `
         <div class="history-item">
@@ -1449,23 +1603,24 @@ async function openHistory_(item_id) {
         </div>
       `;
     } else {
-      el.historyList.innerHTML = movs.map(m => {
-        const ts = esc_(formatDateTime_(m.timestamp || ''));
-        const user = esc_(m.usuario || '');
-        const acc = esc_(humanAction_(m.accion || ''));
-        const qty = esc_(fmtQty_(m.cantidad));
-        const ori = esc_(m.ubicacion_origen || '');
-        const des = esc_(m.ubicacion_destino || '');
-        const mot = esc_(m.motivo || '');
+      el.historyList.innerHTML = movs
+        .map((m) => {
+          const ts = esc_(formatDateTime_(m.timestamp || ''));
+          const user = esc_(m.usuario || '');
+          const acc = esc_(humanAction_(m.accion || ''));
+          const qty = esc_(fmtQty_(m.cantidad));
+          const ori = esc_(m.ubicacion_origen || '');
+          const des = esc_(m.ubicacion_destino || '');
+          const mot = esc_(m.motivo || '');
 
-        let locText = '';
-        if (String(m.accion || '').toUpperCase() === 'MOVE') {
-          locText = `${ori || '—'} → ${des || '—'}`;
-        } else {
-          locText = ori || des || '—';
-        }
+          let locText = '';
+          if (String(m.accion || '').toUpperCase() === 'MOVE') {
+            locText = `${ori || '—'} → ${des || '—'}`;
+          } else {
+            locText = ori || des || '—';
+          }
 
-        return `
+          return `
           <div class="history-item">
             <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
               <div>
@@ -1484,7 +1639,8 @@ async function openHistory_(item_id) {
             </div>
           </div>
         `;
-      }).join('');
+        })
+        .join('');
     }
 
     openModal('historyModal');
@@ -1502,7 +1658,7 @@ function isAdmin_() {
 }
 
 function setupAdminSecret_() {
-  if (!el.logoTrigger) return;
+  if (!el.logoTrigger || state.bindings.adminSecretWired) return;
 
   let timer = null;
 
@@ -1521,11 +1677,12 @@ function setupAdminSecret_() {
 
   el.logoTrigger.addEventListener('mousedown', start);
   el.logoTrigger.addEventListener('touchstart', start, { passive: true });
-
   el.logoTrigger.addEventListener('mouseup', cancel);
   el.logoTrigger.addEventListener('mouseleave', cancel);
   el.logoTrigger.addEventListener('touchend', cancel);
   el.logoTrigger.addEventListener('touchcancel', cancel);
+
+  state.bindings.adminSecretWired = true;
 }
 
 function tryOpenAdmin_() {
@@ -1535,6 +1692,7 @@ function tryOpenAdmin_() {
   }
 
   state.ui.adminUnlocked = true;
+
   if (el.adminPanel) {
     el.adminPanel.style.display = 'block';
     el.adminPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1682,7 +1840,13 @@ async function bootApp_() {
     showLoginScreen_(false);
     updateSessionUI_();
 
-    if (!$('#inventoryToolbar')) injectEnhancedUI_();
+    if (!$('#inventoryToolbar')) {
+      injectEnhancedUI_();
+    } else {
+      refreshDynamicRefs_();
+    }
+
+    wireDynamicEvents_();
 
     await loadBootstrap_();
     setToolbarSubtitle_();
@@ -1690,6 +1854,7 @@ async function bootApp_() {
     updateMovementFieldsVisibility_();
 
     state.ready = true;
+    state.booted = true;
   } catch (err) {
     console.error(err);
 
@@ -1710,7 +1875,7 @@ async function bootApp_() {
    INIT
 ========================= */
 async function init_() {
-  wireEvents_();
+  wireStaticEvents_();
 
   const hasValidSession = await validateStoredSession_();
 
@@ -1718,6 +1883,7 @@ async function init_() {
     showLoginScreen_(false);
     updateSessionUI_();
     await bootApp_();
+
     if (state.who?.name) {
       toast_(`Hola, ${state.who.name} 👋`);
     }
@@ -1726,6 +1892,7 @@ async function init_() {
 
   showLoginScreen_(true);
   setLoginError_('');
+
   if (el.loginUser) el.loginUser.focus();
 }
 
