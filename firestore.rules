@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ================================================================
+       APP EXISTENTE (Préstamo de herramientas) — NO TOCAR
+       Mantiene exactamente el acceso que ya tenía.
+    ================================================================ */
+    function autorizado() {
+      return request.auth != null && request.auth.token.email in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com',
+        'imusicala@gmail.com',
+        'musicalaasesor@gmail.com'
+      ];
+    }
+
+    match /{document=**} {
+      allow read, write: if autorizado();
+    }
+
+    /* ================================================================
+       INVENTARIO MUSICALA
+       Colecciones: inventario_items, inventario_stock,
+                    inventario_movimientos, inventario_usuarios
+       (Las reglas en Firestore se combinan con OR: estas reglas
+        AMPLÍAN el acceso solo sobre las colecciones del inventario,
+        sin afectar lo anterior.)
+    ================================================================ */
+
+    // Admins del inventario que entran con Google
+    function invAdminEmail() {
+      return request.auth != null && request.auth.token.email in [
+        'alekcaballeromusic@gmail.com',
+        'catalina.medina.leal@gmail.com',
+        'adminmusicala@gmail.com'
+      ];
+    }
+
+    // Usuario creado desde el panel (usuario + contraseña), activo
+    function invUsuarioDoc() {
+      return get(/databases/$(database)/documents/inventario_usuarios/$(request.auth.uid)).data;
+    }
+
+    function invUsuarioActivo() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/inventario_usuarios/$(request.auth.uid))
+        && invUsuarioDoc().active == true;
+    }
+
+    function invAdmin() {
+      return invAdminEmail()
+        || (invUsuarioActivo() && invUsuarioDoc().role == 'ADMIN');
+    }
+
+    function invPuedeUsar() {
+      return invAdminEmail() || invUsuarioActivo();
+    }
+
+    match /inventario_items/{itemId} {
+      allow read, write: if invPuedeUsar();
+    }
+
+    match /inventario_stock/{stockId} {
+      allow read, write: if invPuedeUsar();
+    }
+
+    match /inventario_movimientos/{movId} {
+      allow read, create: if invPuedeUsar();
+      // El historial no se edita ni se borra desde la app
+      allow update, delete: if invAdmin();
+    }
+
+    match /inventario_usuarios/{uid} {
+      // Cada usuario puede leer su propio perfil; los admins todo
+      allow read: if request.auth != null && (request.auth.uid == uid || invAdmin());
+      allow write: if invAdmin();
+    }
+  }
+}
